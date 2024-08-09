@@ -3,4 +3,14 @@ name = "newsletter"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+path = "src/main.rs"
+name = "newsletter"
+
 [dependencies]
+actix-web = "4.8.0"
+reqwest = "0.12.5"
+tokio = {version = "1.39.2", features = ["macros", "rt-multi-thread"]}
