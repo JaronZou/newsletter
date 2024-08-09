@@ -1,10 +1,11 @@
 #[tokio::test]
-async fn health_check_works() {
-    // No .await, no .expect
-    let addr = spawn_app();
-    // We need to bring in `reqwest`
-    // to perform HTTP requests against our application
+async fn subscribe_returns_a_200_for_valid_form_data() {
+    // Arrange
+    let server_addr = spawn_app();
     let client = reqwest::Client::new();
+
+    // Act
+    let body = "name=le%20guin&email=ursula_le_guin%40gmail.com";
     // The really interesting things happened here, the .await here
     // caused the `tokio` runtime to asynchronized to poll both client's
     // send event and the server's running event, but we only wait the
@@ -13,14 +14,47 @@ async fn health_check_works() {
     // the checks are passed or failed, the test is over, it will close
     // along with the *server* running behind it.
     let response = client
-        .get(format!("{}/health_check", addr))
+        .post(format!("{}/subscriptions", server_addr))
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body)
         .send()
         .await
         .expect("Failed to execute request.");
 
     // Assert
-    assert!(response.status().is_success());
-    assert_eq!(Some(0), response.content_length());
+    assert_eq!(200, response.status().as_u16());
+}
+
+#[tokio::test]
+async fn subscribe_returns_a_400_when_missing_data() {
+    // Arrange
+    let server_addr = spawn_app();
+    let client = reqwest::Client::new();
+    let test_cases = vec![
+        ("name=le%20guin", "missing the email"),
+        ("email=ursula_le_guin%40gmail.com", "missing the name"),
+        ("", "missing both name and email"),
+    ];
+
+    for (invalid_body, error_message) in test_cases {
+        // Act
+        let response = client
+            .post(format!("{}/subscriptions", server_addr))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(invalid_body)
+            .send()
+            .await
+            .expect("Failed to execute request.");
+
+        // Assert
+        assert_eq!(
+            400,
+            response.status().as_u16(),
+            // Additional customised error message on test failure
+            "The API did not fail with 400 Bad Request when the payload was {}.",
+            error_message
+        );
+    }
 }
 
 // No .await call, therefore no need for `spawn_app` to be asyn cnow.
