@@ -1,0 +1,585 @@
+diff --git a/.env b/.env
+new file mode 100644
+index 0000000..37c7c24
+--- /dev/null
++++ b/.env
+@@ -0,0 +1 @@
++DATABASE_URL=postgres://postgres:password@localhost:5432/newsletter
+\ No newline at end of file
+diff --git a/.github/workflows/basic-checks.yml b/.github/workflows/basic-checks.yml
+index 40809db..ce7c482 100644
+--- a/.github/workflows/basic-checks.yml
++++ b/.github/workflows/basic-checks.yml
+@@ -4,6 +4,8 @@ on: [push, pull_request]
+ 
+ env:
+   CARGO_TERM_COLOR: always
++  SQLX_VERSION: 0.8.0
++  SQLX_FEATURES: "rustls,postgres"
+ 
+ jobs:
+ 
+@@ -21,34 +23,126 @@ jobs:
+   clippy:
+     name: Clippy
+     runs-on: ubuntu-latest
++    services:
++      postgres:
++        image: postgres:14
++        env: 
++          POSTGRES_USER: postgres
++          POSTGRES_PASSWORD: password
++          POSTGRES_DB: postgres
++        ports: 
++          - 5432:5432
+     steps:
+-      - uses: actions/checkout@v4
+-      - uses: dtolnay/rust-toolchain@stable
+-        with:
++      - name: Checkout repository code
++        uses: actions/checkout@v4
++
++      - name: Install rust toolchain
++        uses: dtolnay/rust-toolchain@stable
++        with: 
+           components: clippy
+-      - uses: Swatinem/rust-cache@v2
++      
++      - name: Rust Cache Action
++        uses: Swatinem/rust-cache@v2
++        with:
++          key: sqlx-${{ env.SQLX_VERSION }}
++
++      - name: Install sqlx-cli
++        run: 
++          cargo install sqlx-cli
++            --version=${{ env.SQLX_VERSION }}
++            --features ${{ env.SQLX_FEATURES }}
++            --no-default-features
++            --locked
++
++      - name: Install postgresql-client
++        run: sudo apt-get update && sudo apt-get install postgresql-client -y
++
++      - name: Migrate database
++        run: SKIP_DOCKER=true ./scripts/init_db.sh
++
+       - name: Linting
+         run: cargo clippy -- -D warnings
+ 
+   test:
+     name: Test
+     runs-on: ubuntu-latest
++    services:
++      postgres:
++        image: postgres:14
++        env: 
++          POSTGRES_USER: postgres
++          POSTGRES_PASSWORD: password
++          POSTGRES_DB: postgres
++        ports: 
++          - 5432:5432
++
+     steps:
+-      - uses: actions/checkout@v4
+-      - uses: dtolnay/rust-toolchain@stable
+-      - uses: Swatinem/rust-cache@v2
++      - name: Checkout repository code
++        uses: actions/checkout@v4
++
++      - name: Install rust toolchain
++        uses: dtolnay/rust-toolchain@stable
++      
++      - name: Rust Cache Action
++        uses: Swatinem/rust-cache@v2
++        with:
++          key: sqlx-${{ env.SQLX_VERSION }}
++
++      - name: Install sqlx-cli
++        run: 
++          cargo install sqlx-cli
++            --version=${{ env.SQLX_VERSION }}
++            --features ${{ env.SQLX_FEATURES }}
++            --no-default-features
++            --locked
++
++      - name: Install postgresql-client
++        run: sudo apt-get update && sudo apt-get install postgresql-client -y
++
++      - name: Migrate database
++        run: SKIP_DOCKER=true ./scripts/init_db.sh
++
+       - name: Run tests
+         run: cargo test
+ 
+   coverage:
+     name: Code coverage
+     runs-on: ubuntu-latest
+-    container:
+-      image: xd009642/tarpaulin
+-      options: --security-opt seccomp=unconfined
++    services:
++      postgres:
++        image: postgres:14
++        env: 
++          POSTGRES_USER: postgres
++          POSTGRES_PASSWORD: password
++          POSTGRES_DB: postgres
++        ports: 
++          - 5432:5432
++
+     steps:
+-      - name: Checkout repository
++      - name: Checkout repository code
+         uses: actions/checkout@v4
++
++      - name: Install rust toolchain
++        uses: dtolnay/rust-toolchain@stable
++      
++      - name: Rust Cache Action
++        uses: Swatinem/rust-cache@v2
++        with:
++          key: sqlx-${{ env.SQLX_VERSION }}
++
++      - name: Install sqlx-cli
++        run: 
++          cargo install sqlx-cli
++            --version=${{ env.SQLX_VERSION }}
++            --features ${{ env.SQLX_FEATURES }}
++            --no-default-features
++            --locked
++
++      - name: Install postgresql-client
++        run: sudo apt-get update && sudo apt-get install postgresql-client -y
++
++      - name: Migrate database
++        run: SKIP_DOCKER=true ./scripts/init_db.sh
++
+       - name: Generate code coverage
+-        run: |
+-          cargo tarpaulin --verbose --workspace
++        run: cargo install tarpaulin && cargo tarpaulin --verbose --workspace
+diff --git a/Cargo.toml b/Cargo.toml
+index f0d146e..98caa25 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -12,6 +12,19 @@ name = "newsletter"
+ 
+ [dependencies]
+ actix-web = "4.8.0"
++config = "0.14.0"
+ reqwest = "0.12.5"
+ serde = {version = "1.0.205", features = ["derive"]}
+ tokio = {version = "1.39.2", features = ["macros", "rt-multi-thread"]}
++
++[dependencies.sqlx]
++version = "0.8.0"
++default-features = false
++features = [
++    "runtime-tokio-rustls",
++    "macros",
++    "postgres",
++    "uuid",
++    "chrono",
++    "migrate"
++]
+diff --git a/configuration.yaml b/configuration.yaml
+new file mode 100644
+index 0000000..41d12f3
+--- /dev/null
++++ b/configuration.yaml
+@@ -0,0 +1,7 @@
++application_port: 8000
++database:
++  username: "postgres"
++  password: "password"
++  port: 5432
++  host: "127.0.0.1"
++  database_name: "newsletter"
+\ No newline at end of file
+diff --git a/migrations/20240811080549_create_subscriptions_table.sql b/migrations/20240811080549_create_subscriptions_table.sql
+new file mode 100644
+index 0000000..44b0adc
+--- /dev/null
++++ b/migrations/20240811080549_create_subscriptions_table.sql
+@@ -0,0 +1,8 @@
++-- Add migration script here
++CREATE TABLE subscriptions(
++    id uuid NOT NULL,
++    PRIMARY KEY (id),
++    email TEXT NOT NULL UNIQUE,
++    name TEXT NOT NULL,
++    subscribed_at TIMESTAMPTZ NOT NULL
++);
+\ No newline at end of file
+diff --git a/scripts/init_db.sh b/scripts/init_db.sh
+new file mode 100755
+index 0000000..a10b8d3
+--- /dev/null
++++ b/scripts/init_db.sh
+@@ -0,0 +1,47 @@
++#!/bin/bash
++set -x
++set -eo pipefail
++
++if ! [ -x "$(command -v psql)" ]; then
++    echo >&2 "Error: psql is not installed."
++    exit 1
++fi
++
++if ! [ -x "$(command -v sqlx)" ]; then
++    echo >&2 "Error: sqlx is not installed."
++    echo >&2 "Use:"
++    echo >&2 " cargo install --version=0.5.7 sqlx-cli --no-default-features --features postgres"
++    echo >&2 "to install it."
++    exit 1
++fi
++
++DB_USER=${POSTGRES_USER:=postgres}
++DB_PASSWORD="${POSTGRES_PASSWORD:=password}"
++DB_NAME="${POSTGRES_DB:=newsletter}"
++DB_PORT="${POSTGRES_PORT:=5432}"
++
++# Allow to skip Docker if a dockerized Postgres database is already running
++if [[ -z "${SKIP_DOCKER}" ]]
++then
++    docker run \
++        -e POSTGRES_USER=${DB_USER} \
++        -e POSTGRES_PASSWORD=${DB_PASSWORD} \
++        -e POSTGRES_DB=${DB_NAME} \
++        -p "${DB_PORT}":5432 \
++        -d postgres \
++        postgres -N 1000
++fi
++
++export PGPASSWORD="${DB_PASSWORD}"
++until psql -h "localhost" -U "${DB_USER}" -p "${DB_PORT}" -d "postgres" -c '\q'; do
++    >&2 echo "Postgres is still unavailable - sleeping"
++    sleep 1
++done
++
++>&2 echo "Postgres is up and running on port ${DB_PORT} - running migrations now!"
++
++export DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@localhost:${DB_PORT}/${DB_NAME}
++sqlx database create
++sqlx migrate run
++
++>&2 echo "Postgres has been migrated, ready to go!"
+\ No newline at end of file
+diff --git a/src/configuration.rs b/src/configuration.rs
+new file mode 100644
+index 0000000..aca377c
+--- /dev/null
++++ b/src/configuration.rs
+@@ -0,0 +1,37 @@
++#[derive(serde::Deserialize)]
++pub struct Settings {
++    pub database: DatabaseSettings,
++    pub application_port: u16,
++}
++
++#[derive(serde::Deserialize)]
++pub struct DatabaseSettings {
++    pub username: String,
++    pub password: String,
++    pub port: u16,
++    pub host: String,
++    pub database_name: String,
++}
++
++pub fn get_configuration() -> Result<Settings, config::ConfigError> {
++    // Initialize our configuration reader
++    // Add configuration value from a file named `configuration`.
++    // It will look for any top-level file with an extension
++    // that `config` knows how to parse: yaml, json, etc.
++    let settings = config::Config::builder()
++        .add_source(config::File::with_name("configuration"))
++        .build()?;
++
++    // Try to convert the configuration values it read into
++    // out Settings type
++    settings.try_deserialize()
++}
++
++impl DatabaseSettings {
++    pub fn connection_string(&self) -> String {
++        format!(
++            "postgres://{}:{}@{}:{}/{}",
++            self.username, self.password, self.host, self.port, self.database_name
++        )
++    }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index 169636a..5d1dce7 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,26 +1,3 @@
+-use actix_web::{dev::Server, web, App, HttpResponse, HttpServer};
+-
+-/// Create an asynchronous server bind to the given `TcpListener`.
+-pub fn run(listener: std::net::TcpListener) -> Result<Server, std::io::Error> {
+-    let server = HttpServer::new(|| App::new().route("/subscriptions", web::post().to(subscribe)))
+-        .listen(listener)?
+-        .run();
+-
+-    Ok(server)
+-}
+-
+-#[allow(dead_code)]
+-#[derive(serde::Deserialize)]
+-struct FormData {
+-    name: String,
+-    email: String,
+-}
+-
+-// The parameter we expected is a FormData, the `actix_web` will deserialize
+-// it by invoking the functions of the `Deserialize` trait.
+-// 
+-// Once the `Deserialize` is passed, the `actix_web` invokes the route's 
+-// handler. Otherwise, it responds with 400.
+-async fn subscribe(_from: web::Form<FormData>) -> HttpResponse {
+-    HttpResponse::Ok().finish()
+-}
++pub mod configuration;
++pub mod routes;
++pub mod startup;
+diff --git a/src/main.rs b/src/main.rs
+index 8aa461d..c9fce91 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,9 +1,19 @@
+-use std::net::TcpListener;
+-
+-use newsletter::run;
++use newsletter::{configuration::get_configuration, startup::run};
++use sqlx::{Connection, PgConnection};
+ 
+ #[tokio::main]
+ async fn main() -> std::io::Result<()> {
+-    let listener = TcpListener::bind("localhost:8000")?;
+-    run(listener)?.await
++    // Panic if we can't read configuration
++    let configuration = get_configuration().expect("Failed to readconfiguration.");
++
++    let address = format!("127.0.0.1:{}", configuration.application_port);
++    let listener = std::net::TcpListener::bind(address)?;
++
++    // The `Connection` trait MUST be in scope for us to invoke
++    // `PgConnection::connect` - it is not an inherent method of the struct!
++    let connection = PgConnection::connect(&configuration.database.connection_string())
++        .await
++        .expect("Failed to connect to Postgres.");
++
++    run(listener, connection)?.await
+ }
+diff --git a/src/routes/health_check.rs b/src/routes/health_check.rs
+new file mode 100644
+index 0000000..d7eb4e0
+--- /dev/null
++++ b/src/routes/health_check.rs
+@@ -0,0 +1,5 @@
++use actix_web::HttpResponse;
++
++pub async fn health_check() -> HttpResponse {
++    HttpResponse::Ok().finish()
++}
+diff --git a/src/routes/mod.rs b/src/routes/mod.rs
+new file mode 100644
+index 0000000..90ffeed
+--- /dev/null
++++ b/src/routes/mod.rs
+@@ -0,0 +1,5 @@
++mod health_check;
++mod subscriptions;
++
++pub use health_check::*;
++pub use subscriptions::*;
+diff --git a/src/routes/subscriptions.rs b/src/routes/subscriptions.rs
+new file mode 100644
+index 0000000..a07dab4
+--- /dev/null
++++ b/src/routes/subscriptions.rs
+@@ -0,0 +1,17 @@
++use actix_web::{web, HttpResponse};
++
++#[allow(dead_code)]
++#[derive(serde::Deserialize)]
++pub struct FormData {
++    name: String,
++    email: String,
++}
++
++// The parameter we expected is a FormData, the `actix_web` will deserialize
++// it by invoking the functions of the `Deserialize` trait.
++//
++// Once the `Deserialize` is passed, the `actix_web` invokes the route's
++// handler. Otherwise, it responds with 400.
++pub async fn subscribe(_from: web::Form<FormData>) -> HttpResponse {
++    HttpResponse::Ok().finish()
++}
+diff --git a/src/startup.rs b/src/startup.rs
+new file mode 100644
+index 0000000..db27428
+--- /dev/null
++++ b/src/startup.rs
+@@ -0,0 +1,48 @@
++use actix_web::{dev::Server, web, App, HttpServer};
++use sqlx::PgConnection;
++
++use crate::routes::{health_check, subscribe};
++use crate::configuration::get_configuration;
++
++/// Create an asynchronous server bind to the given `TcpListener`.
++pub fn run(listener: std::net::TcpListener, connection: PgConnection) -> Result<Server, std::io::Error> {
++    // Wrap the connection in a smart pointer
++    let connection = web::Data::new(connection);
++    // Capture `connection` from the surrourding environment
++    let server = HttpServer::new(move || {
++        App::new()
++            .route("/health_check", web::get().to(health_check))
++            .route("/subscriptions", web::post().to(subscribe))
++            .app_data(connection.clone())
++    })
++    .listen(listener)?
++    .run();
++
++    Ok(server)
++}
++
++// No .await call, therefore no need for `spawn_app` to be asyn cnow.
++// We are also running tests, so it is not worth it to propagate errors:
++// if we fail to perform the required setup we can just panic and crash
++// all the things.
++// #[allow(clippy::let_underscore_future)]
++// pub fn spawn_app() -> String {
++//     let listener = std::net::TcpListener::bind("localhost:0").expect("Failed to bind random port");
++//     let port = listener.local_addr().unwrap().port();
++
++//     // Panic if we can't read configuration
++//     let configuration = get_configuration().expect("Failed to readconfiguration.");
++
++//     // The `Connection` trait MUST be in scope for us to invoke
++//     // `PgConnection::connect` - it is not an inherent method of the struct!
++//     let mut connection = PgConnection::connect(&configuration.database.connection_string())
++//         .await
++//         .expect("Failed to connect to Postgres.");
++
++//     let server = run(listener, connection).expect("Failed to bind address");
++//     // Launch the server as a background task
++//     // tokio::spawn returns a handle to the spawned future,
++//     // but we have no use for it here, hence the non-binding let
++//     let _ = tokio::spawn(server);
++//     format!("http://localhost:{}", port)
++// }
+diff --git a/tests/health_check.rs b/tests/health_check.rs
+new file mode 100644
+index 0000000..3c6963a
+--- /dev/null
++++ b/tests/health_check.rs
+@@ -0,0 +1,19 @@
++use newsletter::startup;
++
++#[tokio::test]
++async fn health_check_works() {
++    // No .await, no .expect
++    let app_address = startup::spawn_app();
++    let client = reqwest::Client::new();
++
++    // Send request
++    let response = client
++        .get(format!("{}/health_check", app_address))
++        .send()
++        .await
++        .expect("Failed to execute request.");
++
++    // Assert
++    assert!(response.status().is_success());
++    assert_eq!(Some(0), response.content_length());
++}
+diff --git a/tests/subscribe.rs b/tests/subscriptions.rs
+similarity index 63%
+rename from tests/subscribe.rs
+rename to tests/subscriptions.rs
+index fe45552..a4abe57 100644
+--- a/tests/subscribe.rs
++++ b/tests/subscriptions.rs
+@@ -1,7 +1,19 @@
++use newsletter::{configuration::get_configuration, startup};
++use sqlx::{Connection, PgConnection};
++
+ #[tokio::test]
+ async fn subscribe_returns_a_200_for_valid_form_data() {
++    // Read from configuration, and try to connect to postgres
++    let configuration = get_configuration().expect("Failed to read configuration");
++    let connection_string = configuration.database.connection_string();
++    // The `Connection` trait MUST be in scope for us to invoke
++    // `PgConnection::connect` - it is not an inherent method of the struct!
++    let mut connection = PgConnection::connect(&connection_string)
++        .await
++        .expect("Failed to connect to Postgres.");
++
+     // Arrange
+-    let server_addr = spawn_app();
++    let app_address = startup::spawn_app();
+     let client = reqwest::Client::new();
+ 
+     // Act
+@@ -14,7 +26,7 @@ async fn subscribe_returns_a_200_for_valid_form_data() {
+     // the checks are passed or failed, the test is over, it will close
+     // along with the *server* running behind it.
+     let response = client
+-        .post(format!("{}/subscriptions", server_addr))
++        .post(format!("{}/subscriptions", app_address))
+         .header("Content-Type", "application/x-www-form-urlencoded")
+         .body(body)
+         .send()
+@@ -23,12 +35,20 @@ async fn subscribe_returns_a_200_for_valid_form_data() {
+ 
+     // Assert
+     assert_eq!(200, response.status().as_u16());
++
++    let saved = sqlx::query!("SELECT email, name FROM subscriptions",)
++        .fetch_one(&mut connection)
++        .await
++        .expect("Failed to fetch saved subscription.");
++
++    assert_eq!(saved.email, "ursula_le_guin@gmail.com");
++    assert_eq!(saved.name, "le guin");
+ }
+ 
+ #[tokio::test]
+ async fn subscribe_returns_a_400_when_missing_data() {
+     // Arrange
+-    let server_addr = spawn_app();
++    let app_address = startup::spawn_app();
+     let client = reqwest::Client::new();
+     let test_cases = vec![
+         ("name=le%20guin", "missing the email"),
+@@ -39,7 +59,7 @@ async fn subscribe_returns_a_400_when_missing_data() {
+     for (invalid_body, error_message) in test_cases {
+         // Act
+         let response = client
+-            .post(format!("{}/subscriptions", server_addr))
++            .post(format!("{}/subscriptions", app_address))
+             .header("Content-Type", "application/x-www-form-urlencoded")
+             .body(invalid_body)
+             .send()
+@@ -56,18 +76,3 @@ async fn subscribe_returns_a_400_when_missing_data() {
+         );
+     }
+ }
+-
+-// No .await call, therefore no need for `spawn_app` to be asyn cnow.
+-// We are also running tests, so it is not worth it to propagate errors:
+-// if we fail to perform the required setup we can just panic and crash
+-// all the things.
+-fn spawn_app() -> String {
+-    let listener = std::net::TcpListener::bind("localhost:0").expect("Failed to bind random port");
+-    let port = listener.local_addr().unwrap().port();
+-    let server = newsletter::run(listener).expect("Failed to bind address");
+-    // Launch the server as a background task
+-    // tokio::spawn returns a handle to the spawned future,
+-    // but we have no use for it here, hence the non-binding let
+-    let _ = tokio::spawn(server);
+-    format!("http://localhost:{}", port)
+-}
