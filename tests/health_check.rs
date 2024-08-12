@@ -6,6 +6,8 @@ async fn health_check_works() {
     let test_app = startup::spawn_app().await;
     let client = reqwest::Client::new();
 
+    println!("{}", test_app.address.clone());
+
     // Send request
     let response = client
         .get(format!("{}/health_check", test_app.address))
